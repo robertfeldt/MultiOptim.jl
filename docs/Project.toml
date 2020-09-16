@@ -1,0 +1,3 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+MultiOptim = "97dbae18-c557-42b6-9ff7-4ae43566c0a4"

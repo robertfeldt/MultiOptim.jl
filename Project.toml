@@ -1,0 +1,13 @@
+name = "MultiOptim"
+uuid = "97dbae18-c557-42b6-9ff7-4ae43566c0a4"
+authors = ["Robert Feldt"]
+version = "0.1.0"
+
+[compat]
+julia = "1.5"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
