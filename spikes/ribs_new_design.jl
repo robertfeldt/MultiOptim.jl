@@ -65,6 +65,7 @@ e = evaluate(RastriginMOOEvaluator(), X1)
 # Now let's use a simple grid archive that maps the feature vector into
 # a grid and then saves the best solution per grid.
 abstract type AbstractGridArchive{S,E} <: AbstractArchive{S,E} end
+cellside(a::AbstractGridArchive, i::Int) = 0.1
 
 # Later, we will want to give feewback to Optimizers/Emitters about
 # the status of an archive after an addition, here are some basic messages:
@@ -81,15 +82,18 @@ end
 struct NoUpdateStatus <: ArchiveStatus end
 
 # Default cellid function just divides each feature value by a fixed grid size
-function cellid(a::AbstractGridArchive{S,E}, evaluation::E; gridside::Float64 = 0.1) where {S, F, B <: AbstractVector{<:Number}, E <: AbstractEvaluation{F,B}}
-    return Int[floor(Int, f/gridside) for f in features(evaluation)]
+function cellid(a::AbstractGridArchive{S,E}, evaluation::E) where {S, F, B <: AbstractVector{<:Number}, E <: AbstractEvaluation{F,B}}
+    fs = features(evaluation)
+    return Int[floor(Int, fs[i]/cellside(a, i)) for i in 1:length(fs)]
 end
 
 struct IntGridArchive{S,E} <: AbstractGridArchive{S,E}
     grid::Dict{Vector{Int}, Tuple{S,E}}
+    cellside::Float64
 end
-IntGridArchive{S,E}() where {E, S <: AbstractVector{<:Number}} = 
-    IntGridArchive{S,E}(Dict{Vector{Int}, Tuple{S,E}}())
+IntGridArchive{S,E}(cellside::Float64 = 0.1) where {E, S <: AbstractVector{<:Number}} = 
+    IntGridArchive{S,E}(Dict{Vector{Int}, Tuple{S,E}}(), cellside)
+cellside(a::AbstractGridArchive, i::Int) = a.cellside
 
 gridsize(a::IntGridArchive) = length(a.grid)
 size(a::IntGridArchive) = gridsize(a)
@@ -230,12 +234,6 @@ function iterate(o::DefaultOptimizer)
     tell!(o.emitter, batchid, feedbacks)
 end
 
-# Let's iterate 1000 times => 8000 emitted and evaluated candidates
-for _ in 1:1000
-    iterate(O)
-end
-println(size(Archive))
-
 function best_per_fitness(a::AbstractArchive)
     cs = collect(cells(a))
     (cellid1, (sol1, eval1)) = cs[1]
@@ -255,7 +253,136 @@ function best_per_fitness(a::AbstractArchive)
     return bestFitnesses, bestSolutions, bestCells
 end
 
-fs, sols, cs = best_per_fitness(Archive)
-@show fs
-@show sols
-@show cs
+if ARGS[1] == "case1"
+    # Let's iterate 1000 times => 8000 emitted and evaluated candidates
+    for _ in 1:1000
+        iterate(O)
+    end
+    println(size(Archive))
+    fs, sols, cs = best_per_fitness(Archive)
+    @show fs
+    @show sols
+    @show cs
+end
+
+# Now let's apply this to a Boundary Value Exploration problem of the
+# bmi_classification SUT from the PeerJ CS paper.
+# The fitness is a vector of program derivatives:
+#    F1: stringlength_distance(output1, output2) / euclidean_distance(input1, input2)
+#    F2: ncd(LZ4, output1, output2) / euclidean_distance(input1, input2)
+# Behavioral feature vector:
+#    B1: x of input 1
+#    B2: y of input 1
+
+function bmi(height::Integer, weight::Integer)
+    if height < 0 || weight < 0
+        throw(DomainError("Height or Weight cannot be negative."))
+    end
+    heigh_meters = height / 100 # Convert height from cm to meters
+    bmivalue = round(weight / heigh_meters^2, digits = 1) # official standard expects 1 decimal after the comma
+    return (bmivalue)
+end
+
+function bmi_classification(height::Integer, weight::Integer)
+    bmivalue = bmi(height,weight)
+    class = ""
+    if bmivalue < 0
+        throw(DomainError(bmivalue, "BMI was negative. Check your inputs: $(height) cm; $(weight) kg"))
+    elseif bmivalue < 18.5
+        class = "Underweight"
+    elseif bmivalue < 23
+        class = "Normal"
+    elseif bmivalue < 25
+        class = "Overweight"
+    elseif bmivalue < 30
+        class = "Obese"
+    else 
+        class = "Severely obese"
+    end
+    return class
+end
+
+stringlength_distance(o1, o2) = 
+    abs(length(string(o1)) - length(string(o2)))
+
+using CodecZlib
+compressedlength(s) = length(transcode(ZlibCompressor, s))
+lexorderjoin(a, b) = join(sort([a, b]))
+function ncd(a, b)
+    minl, maxl = extrema(Int[compressedlength(a), compressedlength(b)])
+    return (compressedlength(lexorderjoin(a, b)) - minl) / maxl
+end
+
+struct BMIClassificationEvaluation <: AbstractEvaluation{Vector{Float64},Vector{Int}}
+    fitness::Vector{Float64}
+    features::Vector{Int}
+end
+struct BMIClassificationEvaluator <: AbstractEvaluator{BMIClassificationEvaluation} end
+
+using Distances
+
+function evaluate(e::BMIClassificationEvaluator, args::Vector{<:Number}; verbose::Bool = false)
+    # Unpack the two inputs in the two input pairs
+    height1 = floor(Int, args[1])
+    weight1 = floor(Int, args[2])
+    height2 = floor(Int, args[3])
+    weight2 = floor(Int, args[4])
+
+    # Call the SUT to get the two outputs
+    output1 = try
+        bmi_classification(height1, weight1)
+    catch err
+        string(err)
+    end
+    output2 = try
+        bmi_classification(height2, weight2)
+    catch err2
+        string(err2)
+    end
+
+    # Calc the fitnesses
+    input_distance = euclidean(args[1:2], args[3:4])
+    f1 = stringlength_distance(output1, output2) / input_distance
+    f2 = ncd(output1, output2) / input_distance
+
+    if verbose
+        println("Solution: $args")
+        println("  - Pair 1: inputs = (height $height1, weight $weight1)")
+        println("      output = $output1")
+        println("  - Pair 2: inputs = (height $height2, weight $weight2)")
+        println("      output = $output2")
+        println("  - Fitness 1: $f1")
+        println("  - Fitness 2: $f2")
+        println("  - Feature 1: $height1")
+        println("  - Feature 2: $weight1")
+    end
+
+    # Invert the fitnesses so we can minimize => maximize PD
+    fs = Float64[-f1, -f2]
+    bs = Int[height1, weight1]
+    BMIClassificationEvaluation(fs, bs)
+end
+
+if ARGS[1] == "case2"
+    # Allow heights between -1 to 300 cm and weights -1 to 300 kg
+    BMILowBounds  = [-1.0, -1.0, -1.0, -1.0]
+    BMIHighBounds = [300.0, 300.0, 300.0, 300.0]
+
+    # Archive with cell side length 10.0 so circa (300/10)^2=900 cells in the grid
+    Archive = IntGridArchive{S,BMIClassificationEvaluation}(10.0)
+    Em2 = RandomEmitter(BMILowBounds, BMIHighBounds)
+    Ev2 = BMIClassificationEvaluator()
+    O = DefaultOptimizer(8, Archive, Em2, Ev2)
+
+    # Let's iterate 1000 times => 8000 emitted and evaluated candidates
+    for _ in 1:1000
+        iterate(O)
+    end
+    println(size(Archive))
+    fs, sols, cs = best_per_fitness(Archive)
+    @show fs
+    @show sols
+    @show cs
+    evaluate(Ev2, sols[1]; verbose = true)
+    evaluate(Ev2, sols[2]; verbose = true)
+end
