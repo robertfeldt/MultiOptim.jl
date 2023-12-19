@@ -63,12 +63,12 @@ D = length(X1)
 e = evaluate(RastriginMOOEvaluator(), X1)
 
 # Now let's use a simple grid archive that maps the feature vector into
-# a grid and then saves the best solution per grid.
+# a cell of the grid and then saves the best solution per cell.
 abstract type AbstractGridArchive{S,E} <: AbstractArchive{S,E} end
 cellside(a::AbstractGridArchive, i::Int) = 0.1
 
-# Later, we will want to give feewback to Optimizers/Emitters about
-# the status of an archive after an addition, here are some basic messages:
+# Later, we will want to give feedback to Optimizers/Emitters about
+# the status of an archive after an addition, here are some basic feedback messages:
 abstract type ArchiveStatus end
 struct NewCellStatus <: ArchiveStatus
     cell
@@ -81,15 +81,15 @@ struct BetterEvaluationStatus <: ArchiveStatus
 end
 struct NoUpdateStatus <: ArchiveStatus end
 
-# Default cellid function just divides each feature value by a fixed grid size
+# Default cellid function just divides each feature value by a fixed cell (side) size
 function cellid(a::AbstractGridArchive{S,E}, evaluation::E) where {S, F, B <: AbstractVector{<:Number}, E <: AbstractEvaluation{F,B}}
     fs = features(evaluation)
     return Int[floor(Int, fs[i]/cellside(a, i)) for i in 1:length(fs)]
 end
 
 struct IntGridArchive{S,E} <: AbstractGridArchive{S,E}
-    grid::Dict{Vector{Int}, Int} # Index into cells array
-    cells::Vector{Tuple{S,E}}
+    grid::Dict{Vector{Int}, Int} # maps gridified feature vectors into indices of the cells array
+    cells::Vector{Tuple{S,E}} # one (sollution, evaluation) pair per cell
     cellside::Float64
 end
 IntGridArchive{S,E}(cellside::Float64 = 0.1) where {E, S <: AbstractVector{<:Number}} = 
@@ -102,25 +102,25 @@ cells(a::IntGridArchive) = [(key, a.cells[idx]) for (key, idx) in a.grid]
 cellids(a::IntGridArchive) = keys(a.grid)
 
 function add!(archive::IntGridArchive{S,E}, solution::S, evaluation::E) where {S,E}
-    cell = cellid(archive, evaluation)
-    idx = get(archive.grid, cell, nothing)
+    cid = cellid(archive, evaluation)
+    idx = get(archive.grid, cid, nothing)
     if isnothing(idx)
         push!(archive.cells, (solution, evaluation))
-        archive.grid[cell] = length(archive.cells)
-        return NewCellStatus(cell)
+        archive.grid[cid] = length(archive.cells)
+        return NewCellStatus(cid)
     else
         current = archive.cells[idx]
         curreval = last(current)
         if isbetter(evaluation, curreval)
-            return BetterEvaluationStatus(cell, solution, evaluation, curreval)
+            return BetterEvaluationStatus(cid, solution, evaluation, curreval)
         else
             return NoUpdateStatus()
         end
     end
 end
 
-using StatsBase
-function sample(archive::IntGridArchive{S,E}, numsolutions::Int) where {S,E}
+using StatsBase # just for the sample function
+function sample(archive::IntGridArchive, numsolutions::Int)
     res = map(first, StatsBase.sample(archive.cells, numsolutions))
     (res == 1) ? res[1] : res
 end
@@ -319,7 +319,7 @@ stringlength_distance(o1, o2) =
 
 using CodecZlib
 compressedlength(s) = length(transcode(ZlibCompressor, string(s)))
-lexorderjoin(a, b) = join(sort([string(a), string(b)]))
+lexorderjoin(a, b, sep = "") = join(sort([string(a), string(b)]), sep)
 function ncd(a, b)
     minl, maxl = extrema(Int[compressedlength(a), compressedlength(b)])
     return (compressedlength(lexorderjoin(a, b)) - minl) / maxl
@@ -330,7 +330,7 @@ num_exceptions(o1, o2) = sum(map(o -> typeof(o) <: Exception, [o1, o2]))
 const OutputAbstractions = Dict{Any, Int}() # Ensure unique number per abstraction
 stripnumber(s) = replace(string(s), r"\d+" => "")
 function output_abstraction_number(o1, o2)
-    key = lexorderjoin(stripnumber(o1), stripnumber(o2))
+    key = lexorderjoin(stripnumber(o1), stripnumber(o2), ", ")
     global OutputAbstractions
     get!(OutputAbstractions, key, length(OutputAbstractions)+1)
 end
@@ -478,5 +478,10 @@ if ARGS[1] == "case2"
             printstyled("Feature $fidx, val = $val, fitness 2 max\n"; color = :blue)
             evaluate(Ev2, first(last(hasvals[i2])); verbose = true)
         end
+    end
+
+    println("Output abstractions found:")
+    for (k, v) in OutputAbstractions
+        println("  - $v: $k")
     end
 end
