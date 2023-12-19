@@ -96,8 +96,8 @@ IntGridArchive{S,E}(cellside::Float64 = 0.1) where {E, S <: AbstractVector{<:Num
     IntGridArchive{S,E}(Dict{Vector{Int}, Int}(), Tuple{S,E}[], cellside)
 cellside(a::AbstractGridArchive, i::Int) = a.cellside
 
-gridsize(a::IntGridArchive) = length(a.cells)
-size(a::IntGridArchive) = gridsize(a)
+numcells(a::IntGridArchive) = length(a.cells)
+size(a::IntGridArchive) = numcells(a)
 cells(a::IntGridArchive) = [(key, a.cells[idx]) for (key, idx) in a.grid]
 cellids(a::IntGridArchive) = keys(a.grid)
 
