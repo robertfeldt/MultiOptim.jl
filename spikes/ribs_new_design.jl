@@ -402,8 +402,8 @@ end
 # A tailored mutation to reduce the distance between points, should help
 # in "squeezing" boundaries!?
 function shrink_mutate(startpoint::N, p1::N, p2::N) where {N <: Real}
-    # Select one as target
-    target = (rand() < 0.5) ? p1 : p2
+    # Try to go towards a different one (since we might apply this after a xover)
+    target = (startpoint == p1) ? p2 : p1
     # Then mutate between startpoint and target
     return (startpoint + rand() * (target - startpoint))
 end
@@ -470,6 +470,7 @@ if ARGS[1] == "case2"
     fidx = 2
     for val in sort(unique(map(cid -> cid[fidx], collect(cids))))
         hasvals = filter(c -> first(c)[fidx] == val, cs)
+        printstyled("Feature $fidx, val = $val, number of solutions = $(length(hasvals))\n", color = :green)
         _, i1 = findmin(i -> fitness(last(last(hasvals[i])))[1], 1:length(hasvals))
         printstyled("Feature $fidx, val = $val, fitness 1 max\n"; color = :blue)
         evaluate(Ev2, first(last(hasvals[i1])); verbose = true)
