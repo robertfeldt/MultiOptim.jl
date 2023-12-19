@@ -37,21 +37,21 @@ abstract type AbstractOptimizer end
 S = Vector{Float64}
 F = Vector{Float64}
 B = Vector{Float64}
-function rastrigin_MOO_1(X::F; lambda1 = 0.0)
+function rastrigin_MOO_1(X::S; lambda1 = 0.0)
     200 - sum(Float64[((x - lambda1)^2 - 10*cos(2*pi*(x - lambda1))) for x in X])
 end
-function rastrigin_MOO_2(X::F; lambda2 = 2.2)
+function rastrigin_MOO_2(X::S; lambda2 = 2.2)
     200 - sum(Float64[((x - lambda2)^2 - 10*cos(2*pi*(x - lambda2))) for x in X])
 end
-rastrigin_MOO_feature1(X::F) = X[1]
-rastrigin_MOO_feature2(X::F) = X[2]
+rastrigin_MOO_feature1(X::S) = X[1]
+rastrigin_MOO_feature2(X::S) = X[2]
 
 struct RastriginMOOEvaluation <: AbstractEvaluation{F,B}
     fitness::F
     features::B
 end
 struct RastriginMOOEvaluator <: AbstractEvaluator{RastriginMOOEvaluation} end
-function evaluate(e::RastriginMOOEvaluator, X::F)
+function evaluate(e::RastriginMOOEvaluator, X::S)
     fs = Float64[rastrigin_MOO_1(X), rastrigin_MOO_2(X)]
     bs = Float64[rastrigin_MOO_feature1(X), rastrigin_MOO_feature2(X)]
     RastriginMOOEvaluation(fs, bs)
