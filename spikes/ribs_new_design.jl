@@ -464,31 +464,19 @@ if ARGS[1] == "case2"
     evaluate(Ev2, sols[1]; verbose = true)
     evaluate(Ev2, sols[2]; verbose = true)
 
-    # Let's print some example solutions from cells at extreme ends of each behavioral
-    # feature
+    # Let's print the highest fitness solutions from each value of feature 2.
     cids = cellids(Archive)
     cs = cells(Archive)
-    for fidx in 1:length(collect(cids)[1])
-        minval, maxval = extrema(map(cid -> cid[fidx], collect(cids)))
-
-        hasminvals = filter(c -> first(c)[fidx] == minval, cs)
-        _, i1 = findmin(i -> fitness(last(last(hasminvals[i])))[1], 1:length(hasminvals))
-        printstyled("Feature $fidx, minval = $minval, fitness 1 max"; color = :blue)
-        evaluate(Ev2, first(last(hasminvals[i1])); verbose = true)
-        _, i2 = findmin(i -> fitness(last(last(hasminvals[i])))[2], 1:length(hasminvals))
+    fidx = 2
+    for val in sort(unique(map(cid -> cid[fidx], collect(cids))))
+        hasvals = filter(c -> first(c)[fidx] == val, cs)
+        _, i1 = findmin(i -> fitness(last(last(hasvals[i])))[1], 1:length(hasvals))
+        printstyled("Feature $fidx, val = $val, fitness 1 max\n"; color = :blue)
+        evaluate(Ev2, first(last(hasvals[i1])); verbose = true)
+        _, i2 = findmin(i -> fitness(last(last(hasvals[i])))[2], 1:length(hasvals))
         if i2 != i1
-            printstyled("Feature $fidx, minval = $minval, fitness 2 max"; color = :blue)
-            evaluate(Ev2, first(last(hasminvals[i2])); verbose = true)
-        end
-
-        hasmaxvals = filter(c -> first(c)[fidx] == maxval, cs)
-        _, i1 = findmin(i -> fitness(last(last(hasmaxvals[i])))[1], 1:length(hasmaxvals))
-        printstyled("Feature $fidx, maxval = $maxval, fitness 1 max"; color = :blue)
-        evaluate(Ev2, first(last(hasmaxvals[i1])); verbose = true)
-        _, i2 = findmin(i -> fitness(last(last(hasmaxvals[i])))[2], 1:length(hasmaxvals))
-        if i2 != i1
-            printstyled("Feature $fidx, maxval = $maxval, fitness 2 max"; color = :blue)
-            evaluate(Ev2, first(last(hasmaxvals[i2])); verbose = true)
+            printstyled("Feature $fidx, val = $val, fitness 2 max\n"; color = :blue)
+            evaluate(Ev2, first(last(hasvals[i2])); verbose = true)
         end
     end
 end
