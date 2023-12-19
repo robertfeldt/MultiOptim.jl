@@ -99,6 +99,7 @@ cellside(a::AbstractGridArchive, i::Int) = a.cellside
 gridsize(a::IntGridArchive) = length(a.cells)
 size(a::IntGridArchive) = gridsize(a)
 cells(a::IntGridArchive) = [(key, a.cells[idx]) for (key, idx) in a.grid]
+cellids(a::IntGridArchive) = keys(a.grid)
 
 function add!(archive::IntGridArchive{S,E}, solution::S, evaluation::E) where {S,E}
     cell = cellid(archive, evaluation)
@@ -428,6 +429,12 @@ function crossover_arrays(ary1::AbstractVector{S}, ary2::AbstractVector{S}) wher
     return child
 end
 
+# Emitter that randomly samples one of many emitters and uses that.
+struct OneOfEmitter{S<:AbstractVector} <: AbstractEmitter{S}
+    emitters::Vector{AbstractEmitter{S}}
+end
+ask(e::OneOfEmitter) = ask(StatsBase.sample(e.emitters))
+
 if ARGS[1] == "case2"
     # Allow heights between -1 to 300 cm and weights -1 to 300 kg
     BMILowBounds  = [-1.0, -1.0, -1.0, -1.0]
@@ -435,19 +442,53 @@ if ARGS[1] == "case2"
 
     # Archive with cell side length 10.0 so circa (300/10)^2=900 cells in the grid
     Archive = IntGridArchive{S,BMIClassificationEvaluation}(1.0)
-    Em2 = RandomEmitter(BMILowBounds, BMIHighBounds)
+    emitters = [
+        RandomEmitter(BMILowBounds, BMIHighBounds), 
+        CrossoverAndMutateEmitter{Vector{Float64}}(Archive)]
+    Em2 = OneOfEmitter(emitters)
     Ev2 = BMIClassificationEvaluator()
     O = DefaultOptimizer(8, Archive, Em2, Ev2)
+
+    # Add a few random emitted solutions to ensure we can sample the archive...
+    Opre = DefaultOptimizer(8, Archive, emitters[1], Ev2)
+    for _ in 1:10
+        iterate(Opre)
+    end
 
     # Let's iterate 10000 times => 80000 emitted and evaluated candidates
     for _ in 1:10000
         iterate(O)
     end
     println(size(Archive))
-    fs, sols, cs = best_per_fitness(Archive)
-    @show fs
-    @show sols
-    @show cs
+    _, sols, _ = best_per_fitness(Archive)
     evaluate(Ev2, sols[1]; verbose = true)
     evaluate(Ev2, sols[2]; verbose = true)
+
+    # Let's print some example solutions from cells at extreme ends of each behavioral
+    # feature
+    cids = cellids(Archive)
+    cs = cells(Archive)
+    for fidx in 1:length(collect(cids)[1])
+        minval, maxval = extrema(map(cid -> cid[fidx], collect(cids)))
+
+        hasminvals = filter(c -> first(c)[fidx] == minval, cs)
+        _, i1 = findmin(i -> fitness(last(last(hasminvals[i])))[1], 1:length(hasminvals))
+        printstyled("Feature $fidx, minval = $minval, fitness 1 max"; color = :blue)
+        evaluate(Ev2, first(last(hasminvals[i1])); verbose = true)
+        _, i2 = findmin(i -> fitness(last(last(hasminvals[i])))[2], 1:length(hasminvals))
+        if i2 != i1
+            printstyled("Feature $fidx, minval = $minval, fitness 2 max"; color = :blue)
+            evaluate(Ev2, first(last(hasminvals[i2])); verbose = true)
+        end
+
+        hasmaxvals = filter(c -> first(c)[fidx] == maxval, cs)
+        _, i1 = findmin(i -> fitness(last(last(hasmaxvals[i])))[1], 1:length(hasmaxvals))
+        printstyled("Feature $fidx, maxval = $maxval, fitness 1 max"; color = :blue)
+        evaluate(Ev2, first(last(hasmaxvals[i1])); verbose = true)
+        _, i2 = findmin(i -> fitness(last(last(hasmaxvals[i])))[2], 1:length(hasmaxvals))
+        if i2 != i1
+            printstyled("Feature $fidx, maxval = $maxval, fitness 2 max"; color = :blue)
+            evaluate(Ev2, first(last(hasmaxvals[i2])); verbose = true)
+        end
+    end
 end
