@@ -88,24 +88,27 @@ function cellid(a::AbstractGridArchive{S,E}, evaluation::E) where {S, F, B <: Ab
 end
 
 struct IntGridArchive{S,E} <: AbstractGridArchive{S,E}
-    grid::Dict{Vector{Int}, Tuple{S,E}}
+    grid::Dict{Vector{Int}, Int} # Index into cells array
+    cells::Vector{Tuple{S,E}}
     cellside::Float64
 end
 IntGridArchive{S,E}(cellside::Float64 = 0.1) where {E, S <: AbstractVector{<:Number}} = 
-    IntGridArchive{S,E}(Dict{Vector{Int}, Tuple{S,E}}(), cellside)
+    IntGridArchive{S,E}(Dict{Vector{Int}, Int}(), Tuple{S,E}[], cellside)
 cellside(a::AbstractGridArchive, i::Int) = a.cellside
 
-gridsize(a::IntGridArchive) = length(a.grid)
+gridsize(a::IntGridArchive) = length(a.cells)
 size(a::IntGridArchive) = gridsize(a)
-cells(a::IntGridArchive) = a.grid
+cells(a::IntGridArchive) = [(key, a.cells[idx]) for (key, idx) in a.grid]
 
 function add!(archive::IntGridArchive{S,E}, solution::S, evaluation::E) where {S,E}
     cell = cellid(archive, evaluation)
-    current = get(archive.grid, cell, nothing)
-    if isnothing(current)
-        archive.grid[cell] = (solution, evaluation)
+    idx = get(archive.grid, cell, nothing)
+    if isnothing(idx)
+        push!(archive.cells, (solution, evaluation))
+        archive.grid[cell] = length(archive.cells)
         return NewCellStatus(cell)
     else
+        current = archive.cells[idx]
         curreval = last(current)
         if isbetter(evaluation, curreval)
             return BetterEvaluationStatus(cell, solution, evaluation, curreval)
@@ -115,10 +118,17 @@ function add!(archive::IntGridArchive{S,E}, solution::S, evaluation::E) where {S
     end
 end
 
+using StatsBase
+function sample(archive::IntGridArchive{S,E}, numsolutions::Int) where {S,E}
+    res = map(first, StatsBase.sample(archive.cells, numsolutions))
+    (res == 1) ? res[1] : res
+end
+
 # Test:
 A = IntGridArchive{S,RastriginMOOEvaluation}()
 cellid(A, e)
 add!(A, X1, e)
+sample(A, 1)
 
 # Default fitness scheme if the fitness type is vector of numbers is
 # pareto (non-domination) fitness, minimizing.
@@ -271,9 +281,10 @@ end
 #    F1: stringlength_distance(output1, output2) / euclidean_distance(input1, input2)
 #    F2: ncd(LZ4, output1, output2) / euclidean_distance(input1, input2)
 # Behavioral feature vector:
-#    B1: x of input 1
-#    B2: y of input 1
-
+#    B1: num exceptions thrown (0, 1, or 2)
+#    B2: output abstraction tuple (maps errors to their types and other outputs to string, then order them lexicographically, then assigns unique number)
+#    B3: height1 / 50.0
+#    B4: weight1 / 50.0
 function bmi(height::Integer, weight::Integer)
     if height < 0 || weight < 0
         throw(DomainError("Height or Weight cannot be negative."))
@@ -306,11 +317,21 @@ stringlength_distance(o1, o2) =
     abs(length(string(o1)) - length(string(o2)))
 
 using CodecZlib
-compressedlength(s) = length(transcode(ZlibCompressor, s))
-lexorderjoin(a, b) = join(sort([a, b]))
+compressedlength(s) = length(transcode(ZlibCompressor, string(s)))
+lexorderjoin(a, b) = join(sort([string(a), string(b)]))
 function ncd(a, b)
     minl, maxl = extrema(Int[compressedlength(a), compressedlength(b)])
     return (compressedlength(lexorderjoin(a, b)) - minl) / maxl
+end
+
+# Behavioral feature calculation funcs
+num_exceptions(o1, o2) = sum(map(o -> typeof(o) <: Exception, [o1, o2]))
+const OutputAbstractions = Dict{Any, Int}() # Ensure unique number per abstraction
+stripnumber(s) = replace(string(s), r"\d+" => "")
+function output_abstraction_number(o1, o2)
+    key = lexorderjoin(stripnumber(o1), stripnumber(o2))
+    global OutputAbstractions
+    get!(OutputAbstractions, key, length(OutputAbstractions)+1)
 end
 
 struct BMIClassificationEvaluation <: AbstractEvaluation{Vector{Float64},Vector{Int}}
@@ -332,18 +353,24 @@ function evaluate(e::BMIClassificationEvaluator, args::Vector{<:Number}; verbose
     output1 = try
         bmi_classification(height1, weight1)
     catch err
-        string(err)
+        err
     end
     output2 = try
         bmi_classification(height2, weight2)
     catch err2
-        string(err2)
+        err2
     end
 
     # Calc the fitnesses
-    input_distance = euclidean(args[1:2], args[3:4])
+    input_distance = euclidean(args[1:2], args[3:4]) # we use the floats here so there is really a benefit in getting closer
     f1 = stringlength_distance(output1, output2) / input_distance
     f2 = ncd(output1, output2) / input_distance
+
+    # Calc the behavioral features
+    b1 = num_exceptions(output1, output2)
+    b2 = output_abstraction_number(output1, output2)
+    b3 = floor(Int, height1 / 50.0)
+    b4 = floor(Int, weight1 / 50.0)
 
     if verbose
         println("Solution: $args")
@@ -353,14 +380,52 @@ function evaluate(e::BMIClassificationEvaluator, args::Vector{<:Number}; verbose
         println("      output = $output2")
         println("  - Fitness 1: $f1")
         println("  - Fitness 2: $f2")
-        println("  - Feature 1: $height1")
-        println("  - Feature 2: $weight1")
+        println("  - Feature 1: $b1")
+        println("  - Feature 2: $b2")
+        println("  - Feature 3: $b3")
+        println("  - Feature 4: $b4")
     end
 
     # Invert the fitnesses so we can minimize => maximize PD
     fs = Float64[-f1, -f2]
-    bs = Int[height1, weight1]
+    bs = Int[b1, b2, b3, b4]
     BMIClassificationEvaluation(fs, bs)
+end
+
+# A crossover emitter that samples two solutions, crosses
+# over between them, and then mutates one argument to create a new solution.
+struct CrossoverAndMutateEmitter{S<:AbstractVector} <: AbstractEmitter{S}
+    archive
+end
+
+# A tailored mutation to reduce the distance between points, should help
+# in "squeezing" boundaries!?
+function shrink_mutate(startpoint::N, p1::N, p2::N) where {N <: Real}
+    # Select one as target
+    target = (rand() < 0.5) ? p1 : p2
+    # Then mutate between startpoint and target
+    return (startpoint + rand() * (target - startpoint))
+end
+
+function ask(e::CrossoverAndMutateEmitter{S}) where {S<:AbstractVector{<:Number}}
+    # Sample 2 parents and crossover
+    parent1, parent2 = sample(e.archive, 2)
+    candidate = crossover_arrays(parent1, parent2)
+
+    # Now mutate one position
+    idx = rand(1:length(candidate))
+    candidate[idx] = shrink_mutate(candidate[idx], parent1[idx], parent2[idx])
+
+    return candidate
+end
+
+function crossover_arrays(ary1::AbstractVector{S}, ary2::AbstractVector{S}) where S
+    child = copy(ary1)
+    xoverpoint = rand(2:length(child))
+    for i in xoverpoint:length(ary2)
+        child[i] = ary2[i]
+    end
+    return child
 end
 
 if ARGS[1] == "case2"
@@ -369,13 +434,13 @@ if ARGS[1] == "case2"
     BMIHighBounds = [300.0, 300.0, 300.0, 300.0]
 
     # Archive with cell side length 10.0 so circa (300/10)^2=900 cells in the grid
-    Archive = IntGridArchive{S,BMIClassificationEvaluation}(10.0)
+    Archive = IntGridArchive{S,BMIClassificationEvaluation}(1.0)
     Em2 = RandomEmitter(BMILowBounds, BMIHighBounds)
     Ev2 = BMIClassificationEvaluator()
     O = DefaultOptimizer(8, Archive, Em2, Ev2)
 
-    # Let's iterate 1000 times => 8000 emitted and evaluated candidates
-    for _ in 1:1000
+    # Let's iterate 10000 times => 80000 emitted and evaluated candidates
+    for _ in 1:10000
         iterate(O)
     end
     println(size(Archive))
